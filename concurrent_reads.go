@@ -13,6 +13,7 @@ var filename = flag.String("file", "benchmark.dat", "name of the file to create 
 var filesize = flag.Int("filesize", 4096, "size of the file in Mb") // Default is 4Gb
 var concurrency = flag.Int("concurrency", 1, "number of goroutines trying to perform random reads")
 var reads = flag.Int("reads", 1000*1000, "number of reads to perform")
+var chunk = flag.Int("chunk", 4096, "size of chunk to read, in bytes")
 
 func createFile() {
 	fmt.Printf("Creating file %s\n", *filename)
@@ -38,27 +39,33 @@ func createFile() {
 }
 
 // Requests are integers specifying the position in the file to read from
-func reader(reqCh chan int64, errCh chan error) {
-	buf := make([]byte, 4096)
+func reader(reqCh chan uint64, errCh chan error) {
+	bound := uint64((*filesize)*(1024*1024/(*chunk))) // Reads will be chunk-aligned
+	buf := make([]byte, *chunk)
 	file, err := os.Open(*filename)
 	if err != nil {
 		errCh <- err
 		return
 	}
+	var dependency uint64
 	defer file.Close()
 	for req := range reqCh {
-		_, err := file.ReadAt(buf, req)
+		// Mix request with the dependency (to make sure there is no hidden parallelisation)
+		offset := int64((req ^ dependency) % bound)
+		_, err := file.ReadAt(buf, offset)
 		if err != nil {
 			errCh <- err
 			return
 		}
+		// Update the depedency for the next read
+		dependency = binary.LittleEndian.Uint64(buf[:8])
 	}
 	// When complete, send nil to error channel
 	errCh <- nil
 }
 
 func readFile() {
-	reqCh := make(chan int64, *reads)
+	reqCh := make(chan uint64, *reads)
 	errCh := make(chan error, *concurrency)
 	defer close(errCh)
 	// Launch the readers
@@ -66,10 +73,9 @@ func readFile() {
 		go reader(reqCh, errCh)
 	}
 	// Issue requests
-	bound := int64((*filesize)*(1024*1024/4096)) // Reads will be 4k aligned
 	start := time.Now()
 	for r := 0; r<(*reads); r++ {
-		reqCh <- rand.Int63n(bound)
+		reqCh <- rand.Uint64()
 	}
 	close(reqCh)
 	// Wait for errors or completions
