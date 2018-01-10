@@ -58,8 +58,8 @@ func reader(reqCh chan int64, errCh chan error) {
 }
 
 func readFile() {
-	reqCh := make(chan int64)
-	errCh := make(chan error)
+	reqCh := make(chan int64, *reads)
+	errCh := make(chan error, *concurrency)
 	defer close(errCh)
 	// Launch the readers
 	for c := 0; c<(*concurrency); c++ {
